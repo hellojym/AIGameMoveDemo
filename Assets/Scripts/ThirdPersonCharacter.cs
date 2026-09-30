@@ -3,6 +3,7 @@ using UnityEngine;
 [RequireComponent(typeof(CharacterController))]
 public sealed class ThirdPersonCharacter : MonoBehaviour
 {
+    private const float JumpInputBuffer = 0.15f;
     private enum MovementStyle { Run, RunFast, SwaggerWalk }
     private enum CharacterAction { None, Jump, Roll, BigFrontJump }
 
@@ -17,22 +18,28 @@ public sealed class ThirdPersonCharacter : MonoBehaviour
     [SerializeField, Min(0f)] private float jumpForwardMultiplier = 0.7f;
     [SerializeField, Min(0.1f)] private float jumpActionDuration = 1.18f;
     [SerializeField, Min(0.1f)] private float jumpAnimationSpeed = 2f;
-    [SerializeField, Min(0.1f)] private float walkJumpAnimationSpeed = 1f;
-    [SerializeField, Min(0f)] private float walkJumpLaunchDelay = 0.4f;
+    [SerializeField, Min(0.1f)] private float walkJumpAnimationSpeed = 1.2f;
     [SerializeField, Min(0f)] private float walkJumpHeight = 1.85f;
+    [SerializeField, Min(0.1f)] private float bigFrontJumpAnimationSpeed = 1.1f;
     [SerializeField, Min(0.1f)] private float rollActionDuration = 1.17f;
 
     private CharacterController characterController;
     private float verticalSpeed;
     private float actionElapsed;
     private float actionForwardSpeed;
-    private bool jumpLaunched;
-    private float activeJumpLaunchDelay;
+    private bool walkJumpActive;
     private Vector3 actionDirection;
     private MovementStyle movementStyle = MovementStyle.Run;
     private CharacterAction action = CharacterAction.None;
     private string currentAnimation;
     private bool hasMoved;
+    private bool walkMode;
+    private bool jumpQueued;
+    private float jumpQueuedUntil;
+    private Vector3 jumpQueuedDirection;
+    private float jumpQueuedMoveSpeed;
+    private bool queuedWalkJump;
+    private bool queuedBigFrontJump;
     private Vector3 modelLocalPosition;
     private Quaternion modelLocalRotation;
 
@@ -58,6 +65,12 @@ public sealed class ThirdPersonCharacter : MonoBehaviour
 
     private void Update()
     {
+        if (Input.GetKeyDown(KeyCode.LeftControl) || Input.GetKeyDown(KeyCode.RightControl))
+            walkMode = !walkMode;
+
+        movementStyle = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift)
+            ? MovementStyle.RunFast : walkMode ? MovementStyle.SwaggerWalk : MovementStyle.Run;
+
         if (action == CharacterAction.Roll || action == CharacterAction.BigFrontJump)
         {
             if (action == CharacterAction.Roll)
@@ -68,11 +81,6 @@ public sealed class ThirdPersonCharacter : MonoBehaviour
             }
             return;
         }
-
-        movementStyle = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift)
-            ? MovementStyle.RunFast
-            : Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl)
-                ? MovementStyle.SwaggerWalk : MovementStyle.Run;
 
         if (cameraTransform == null)
             return;
@@ -90,31 +98,44 @@ public sealed class ThirdPersonCharacter : MonoBehaviour
         float moveSpeed = movementStyle == MovementStyle.RunFast ? fastRunSpeed
                         : movementStyle == MovementStyle.SwaggerWalk ? swaggerWalkSpeed : runSpeed;
 
+        // Capture the choice on the Space key-down frame. Later direction inputs cannot replace it.
+        if (action == CharacterAction.None && Input.GetKeyDown(KeyCode.Space))
+        {
+            jumpQueued = true;
+            jumpQueuedUntil = Time.time + JumpInputBuffer;
+            jumpQueuedDirection = isMoving ? inputDirection : Vector3.zero;
+            jumpQueuedMoveSpeed = moveSpeed;
+            queuedWalkJump = hasMoved || isMoving;
+            queuedBigFrontJump = isMoving && movementStyle == MovementStyle.RunFast &&
+                                 characterAnimator != null;
+        }
+
+        if (jumpQueued && Time.time > jumpQueuedUntil)
+            jumpQueued = false;
+
         if (action == CharacterAction.None && characterController.isGrounded)
         {
-            if (Input.GetKeyDown(KeyCode.X))
+            if (jumpQueued)
             {
-                BeginBigFrontJump(isMoving ? inputDirection : transform.forward);
-                return;
+                jumpQueued = false;
+                if (queuedBigFrontJump)
+                {
+                    BeginBigFrontJump(jumpQueuedDirection);
+                    return;
+                }
+                BeginJump(jumpQueuedDirection, jumpQueuedMoveSpeed, queuedWalkJump);
             }
-            if (Input.GetKeyDown(KeyCode.C))
+            else if (Input.GetKeyDown(KeyCode.C))
             {
                 BeginRoll(isMoving ? inputDirection : transform.forward);
                 return;
             }
-            if (Input.GetKeyDown(KeyCode.Space))
-                BeginJump(isMoving ? inputDirection : Vector3.zero, moveSpeed);
         }
 
         Vector3 horizontalVelocity;
         if (action == CharacterAction.Jump)
         {
             actionElapsed += Time.deltaTime;
-            if (!jumpLaunched && actionElapsed >= activeJumpLaunchDelay)
-            {
-                jumpLaunched = true;
-                verticalSpeed = Mathf.Sqrt(2f * Mathf.Abs(gravity) * walkJumpHeight);
-            }
             horizontalVelocity = characterController.isGrounded && actionElapsed > 0.1f
                 ? Vector3.zero : actionDirection * actionForwardSpeed;
         }
@@ -150,7 +171,9 @@ public sealed class ThirdPersonCharacter : MonoBehaviour
 
         if (action == CharacterAction.Jump && landed &&
             (characterAnimator == null ? actionElapsed >= jumpActionDuration
-                                       : characterAnimator.GetCurrentAnimatorStateInfo(0).normalizedTime >= 1f))
+                                       : !characterAnimator.IsInTransition(0) &&
+                                         characterAnimator.GetCurrentAnimatorStateInfo(0).normalizedTime >=
+                                         (walkJumpActive ? 0.85f : 1f)))
         {
             action = CharacterAction.None;
             if (characterAnimator != null)
@@ -177,26 +200,25 @@ public sealed class ThirdPersonCharacter : MonoBehaviour
         characterController.Move(animationMotion);
         characterAnimator.transform.localPosition = modelLocalPosition;
 
-        if (action == CharacterAction.BigFrontJump &&
+        if (action == CharacterAction.BigFrontJump && !characterAnimator.IsInTransition(0) &&
             characterAnimator.GetCurrentAnimatorStateInfo(0).normalizedTime >= 1f)
             EndRootMotionAction();
     }
 
-    private void BeginJump(Vector3 direction, float moveSpeed)
+    private void BeginJump(Vector3 direction, float moveSpeed, bool useWalkJump)
     {
         action = CharacterAction.Jump;
         actionElapsed = 0f;
         actionDirection = direction;
         actionForwardSpeed = moveSpeed * jumpForwardMultiplier;
-        bool useWalkJump = hasMoved || direction.sqrMagnitude > 0.001f;
+        walkJumpActive = useWalkJump;
         if (useWalkJump)
             hasMoved = true;
-        jumpLaunched = !useWalkJump;
-        activeJumpLaunchDelay = useWalkJump ? walkJumpLaunchDelay : 0f;
-        verticalSpeed = jumpLaunched ? Mathf.Sqrt(2f * Mathf.Abs(gravity) * jumpHeight) : -2f;
-        PlayAnimation(useWalkJump ? "WalkJump" : "Jump", true);
+        verticalSpeed = Mathf.Sqrt(2f * Mathf.Abs(gravity) *
+            (useWalkJump ? walkJumpHeight : jumpHeight));
         if (characterAnimator != null)
             characterAnimator.speed = useWalkJump ? walkJumpAnimationSpeed : jumpAnimationSpeed;
+        PlayAnimation(useWalkJump ? "WalkJump" : "Jump", false, useWalkJump ? 0.06f : 0.12f);
     }
 
     private void BeginRoll(Vector3 direction)
@@ -222,9 +244,9 @@ public sealed class ThirdPersonCharacter : MonoBehaviour
         action = CharacterAction.BigFrontJump;
         hasMoved = true;
         transform.rotation = Quaternion.LookRotation(direction, Vector3.up);
-        characterAnimator.speed = 1f;
+        characterAnimator.speed = bigFrontJumpAnimationSpeed;
         characterAnimator.applyRootMotion = true;
-        PlayAnimation("BigFrontJump", true);
+        PlayAnimation("BigFrontJump", false, 0.06f);
     }
 
     private void EndRootMotionAction()
@@ -237,7 +259,16 @@ public sealed class ThirdPersonCharacter : MonoBehaviour
             characterAnimator.applyRootMotion = false;
             characterAnimator.transform.SetLocalPositionAndRotation(modelLocalPosition, modelLocalRotation);
         }
-        PlayAnimation(hasMoved ? "WalkIdle" : "StandingIdle");
+        PlayAnimation(IsMovingInputHeld() ? MovementAnimation()
+            : hasMoved ? "WalkIdle" : "StandingIdle");
+    }
+
+    private static bool IsMovingInputHeld()
+    {
+        return Input.GetKey(KeyCode.W) || Input.GetKey(KeyCode.A) ||
+               Input.GetKey(KeyCode.S) || Input.GetKey(KeyCode.D) ||
+               Input.GetKey(KeyCode.UpArrow) || Input.GetKey(KeyCode.LeftArrow) ||
+               Input.GetKey(KeyCode.DownArrow) || Input.GetKey(KeyCode.RightArrow);
     }
 
     private string MovementAnimation()
@@ -246,7 +277,7 @@ public sealed class ThirdPersonCharacter : MonoBehaviour
              : movementStyle == MovementStyle.SwaggerWalk ? "SwaggerWalk" : "Run";
     }
 
-    private void PlayAnimation(string stateName, bool immediate = false)
+    private void PlayAnimation(string stateName, bool immediate = false, float transitionDuration = 0.12f)
     {
         if (characterAnimator == null || currentAnimation == stateName && !immediate)
             return;
@@ -254,7 +285,7 @@ public sealed class ThirdPersonCharacter : MonoBehaviour
         if (immediate)
             characterAnimator.Play(stateName, 0, 0f);
         else
-            characterAnimator.CrossFadeInFixedTime(stateName, 0.12f, 0);
+            characterAnimator.CrossFadeInFixedTime(stateName, transitionDuration, 0);
         currentAnimation = stateName;
     }
 }
