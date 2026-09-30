@@ -7,8 +7,8 @@ public sealed class AdventureCamera : MonoBehaviour
     [SerializeField] private Vector3 focusOffset = new Vector3(0f, 1.4f, 0f);
     [SerializeField, Range(35f, 75f)] private float initialPitch = 55f;
     [SerializeField] private float initialYaw = 30f;
-    [SerializeField, Min(1f)] private float initialDistance = 18f;
-    [SerializeField, Min(1f)] private float minimumDistance = 3.5f;
+    [SerializeField, Min(1f)] private float initialDistance = 8f;
+    [SerializeField, Min(1f)] private float minimumDistance = 1.5f;
     [SerializeField, Min(1f)] private float maximumDistance = 28f;
     [SerializeField, Min(0f)] private float rotationSensitivity = 3f;
     [SerializeField, Min(0f)] private float zoomSensitivity = 5f;

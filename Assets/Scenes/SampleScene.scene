@@ -566,14 +566,13 @@ MonoBehaviour:
   characterAnimator: {fileID: 0}
   runSpeed: 4.5
   fastRunSpeed: 7
-  swaggerWalkSpeed: 1.4
+  swaggerWalkSpeed: 2.2
   turnSpeed: 12
   gravity: -20
   jumpHeight: 1.5
   jumpForwardMultiplier: 0.7
   jumpActionDuration: 1.18
   jumpAnimationSpeed: 2
-  rollSpeed: 3.4
   rollActionDuration: 1.17
 --- !u!4 &1400000004 stripped
 Transform:
@@ -596,8 +595,8 @@ MonoBehaviour:
   focusOffset: {x: 0, y: 1.4, z: 0}
   initialPitch: 55
   initialYaw: 30
-  initialDistance: 18
-  minimumDistance: 3.5
+  initialDistance: 8
+  minimumDistance: 1.5
   maximumDistance: 28
   rotationSensitivity: 3
   zoomSensitivity: 5
