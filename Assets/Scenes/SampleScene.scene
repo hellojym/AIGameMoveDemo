@@ -573,6 +573,9 @@ MonoBehaviour:
   jumpForwardMultiplier: 0.7
   jumpActionDuration: 1.18
   jumpAnimationSpeed: 2
+  walkJumpAnimationSpeed: 1
+  walkJumpLaunchDelay: 0.4
+  walkJumpHeight: 1.85
   rollActionDuration: 1.17
 --- !u!4 &1400000004 stripped
 Transform:
